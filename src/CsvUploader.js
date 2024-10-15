@@ -36,19 +36,21 @@ const CsvUploader = () => {
 
   const sendCsvToApi = async () => {
     try {
-      const response = await fetch("http://127.0.0.1:5000/process", {
+      const response = await fetch("https://school-ai-backend.onrender.com/process", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(csvData),
       });
+  
       const result = await response.json();
       console.log("Processed data:", result);
     } catch (error) {
       console.error("Error sending CSV data to API:", error);
     }
   };
+  
 
   return (
     <div style={{ width: '90%', margin: '0 auto' }}>
