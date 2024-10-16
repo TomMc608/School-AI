@@ -45,11 +45,12 @@ const CsvUploader = () => {
       });
   
       const result = await response.json();
-      console.log("Processed data:", result);
+      console.log("Processed data:", result);  
     } catch (error) {
       console.error("Error sending CSV data to API:", error);
     }
   };
+  
   
 
   return (
