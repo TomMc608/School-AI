@@ -1,11 +1,15 @@
 import React, { useState } from "react";
 import Papa from "papaparse";
+import axios from 'axios';
 
 const CsvUploader = () => {
   const [columns, setColumns] = useState([]);
-  const [firstRow, setFirstRow] = useState({});
-  const [emptyColumns, setEmptyColumns] = useState([]);
-  const [csvData, setCsvData] = useState([]);  // State to hold full CSV data
+  const [csvData, setCsvData] = useState([]);
+  const [selectedColumns, setSelectedColumns] = useState([]);
+  const [averageCorrelation, setAverageCorrelation] = useState(null);
+  const [error, setError] = useState(null);
+  const [errorLogs, setErrorLogs] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
@@ -15,43 +19,89 @@ const CsvUploader = () => {
         header: true,
         skipEmptyLines: true,
         complete: (result) => {
-          // Store the full CSV data
           setCsvData(result.data);
-
-          // Set the column names and the first row
           const firstRowData = result.data[0];
           setColumns(Object.keys(firstRowData));
-          setFirstRow(firstRowData);
-
-          // Identify columns with no data or 'None'
-          const emptyCols = Object.keys(firstRowData).filter(key => !firstRowData[key] || firstRowData[key] === "None" || firstRowData[key] === null);
-          setEmptyColumns(emptyCols);
         },
         error: (error) => {
           console.error("Error parsing CSV file:", error);
+          setError("Error reading CSV data. Please make sure the file is a valid CSV file.");
         },
       });
     }
   };
 
-  const sendCsvToApi = async () => {
-    try {
-      const response = await fetch("https://school-ai-backend.onrender.com/process", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(csvData),
+  const handleSubmit = async () => {
+    if (csvData.length === 0) {
+      setError("Please upload a CSV file first.");
+      return;
+    }
+    if (selectedColumns.length < 2) {
+      setError("Please select at least 2 columns.");
+      return;
+    }
+    setError(null);
+    setErrorLogs([]);
+    setIsLoading(true);
+    setAverageCorrelation(null);
+
+    // Filter csvData to only include selected columns
+    const filteredData = csvData.map(row => {
+      let filteredRow = {};
+      selectedColumns.forEach(col => {
+        filteredRow[col] = row[col];
       });
-  
-      const result = await response.json();
-      console.log("Processed data:", result);  
-    } catch (error) {
-      console.error("Error sending CSV data to API:", error);
+      return filteredRow;
+    });
+
+    try {
+      const response = await retryAxiosRequest(filteredData, selectedColumns);
+      if (response.data.status === 'success') {
+        if (response.data.average_correlation !== "N/A") {
+          setAverageCorrelation(response.data.average_correlation);
+        } else {
+          setAverageCorrelation("N/A");
+        }
+        if (response.data.error_logs && response.data.error_logs.length > 0) {
+          setErrorLogs(response.data.error_logs);
+        }
+      }
+    } catch (e) {
+      console.error("Error sending CSV data to API:", e);
+      setError(`Error sending CSV data to API: ${e.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
-  
-  
+
+  const retryAxiosRequest = async (data, selectedColumns, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await axios.post('http://127.0.0.1:5000/process', data, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          params: {
+            selected_columns: selectedColumns,
+          },
+          timeout: 120000
+        });
+      } catch (error) {
+        console.error(`Attempt ${i + 1} failed:`, error.message);
+        if (i === retries - 1) throw error;
+      }
+    }
+  };
+
+  const handleColumnChange = (column) => {
+    setSelectedColumns((prevSelectedColumns) => {
+      if (prevSelectedColumns.includes(column)) {
+        return prevSelectedColumns.filter((col) => col !== column);
+      } else {
+        return [...prevSelectedColumns, column];
+      }
+    });
+  };
 
   return (
     <div style={{ width: '90%', margin: '0 auto' }}>
@@ -59,47 +109,48 @@ const CsvUploader = () => {
       <input type="file" accept=".csv" onChange={handleFileUpload} />
 
       {columns.length > 0 && (
-        <>
-          <div style={{ overflowX: 'auto', marginTop: '20px', maxWidth: '100%', border: '1px solid #ccc', padding: '10px' }}>
-            <table border="1" style={{ width: '100%', borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
-              <thead>
-                <tr>
-                  {columns.map((key) => (
-                    <th key={key} style={{ padding: '10px', border: '1px solid #ccc', backgroundColor: '#333', color: '#fff' }}>{key}</th>
-                  ))}
-                </tr>
-              </thead>
-            </table>
+        <div>
+          <h3>Select Columns for Correlation Analysis:</h3>
+          <div>
+            {columns.map((column) => (
+              <div key={column}>
+                <input
+                  type="checkbox"
+                  id={column}
+                  checked={selectedColumns.includes(column)}
+                  onChange={() => handleColumnChange(column)}
+                />
+                <label htmlFor={column}>{column}</label>
+              </div>
+            ))}
           </div>
+        </div>
+      )}
 
-          <div style={{ overflowX: 'auto', marginTop: '20px', maxWidth: '100%', border: '1px solid #ccc', padding: '10px' }}>
-            <table border="1" style={{ width: '100%', borderCollapse: 'collapse', whiteSpace: 'nowrap' }}>
-              <tbody>
-                <tr>
-                  {columns.map((key) => (
-                    <td key={key} style={{ padding: '10px', border: '1px solid #ccc' }}>{firstRow[key]}</td>
-                  ))}
-                </tr>
-              </tbody>
-            </table>
-          </div>
+      <button onClick={handleSubmit} style={{ marginTop: "20px", padding: "10px 20px" }}>Submit for Correlation Analysis</button>
 
-          {emptyColumns.length > 0 && (
-            <div style={{ marginTop: '20px', color: '#fff' }}>
-              <p>No data for this student in the following columns:</p>
-              <ul>
-                {emptyColumns.map((col) => (
-                  <li key={col}>{col}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+      {isLoading && (
+        <div>
+          <p>Processing data, please wait...</p>
+        </div>
+      )}
 
-          {/* Button to send CSV data to API */}
-          <button onClick={sendCsvToApi} style={{ marginTop: "20px", padding: "10px 20px" }}>
-            Send Data to API
-          </button>
-        </>
+      {error && <p style={{ color: 'red' }}>{error}</p>}
+      {averageCorrelation !== null && (
+        <div>
+          <h3>Average Correlation:</h3>
+          <p>{averageCorrelation !== "N/A" ? parseFloat(averageCorrelation).toFixed(4) : "N/A"}</p>
+        </div>
+      )}
+      {errorLogs.length > 0 && (
+        <div>
+          <h3>Error Logs:</h3>
+          <ul>
+            {errorLogs.map((log, index) => (
+              <li key={index}>{log}</li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
