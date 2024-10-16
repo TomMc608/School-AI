@@ -28,7 +28,7 @@ def process_csv():
         # Step 1: Data Cleaning
         # Handle missing values by filling with median for numerical or mode for categorical
         for column in df.columns:
-            if df[column].dtype == np.number:
+            if np.issubdtype(df[column].dtype, np.number):
                 df[column].fillna(df[column].median(), inplace=True)
             else:
                 df[column].fillna(df[column].mode()[0], inplace=True)
@@ -38,7 +38,7 @@ def process_csv():
         categorical_features = df.select_dtypes(include=['object']).columns.tolist()
 
         # Step 2: Encoding Categorical Features
-        one_hot_encoder = OneHotEncoder(sparse=False, drop='first')
+        one_hot_encoder = OneHotEncoder(sparse_output=False, drop='first')
         label_encoder = LabelEncoder()
 
         # Apply One-Hot Encoding to unordered categorical columns
