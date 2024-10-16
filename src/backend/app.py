@@ -22,13 +22,20 @@ def process_csv():
         # Get the JSON data from the request
         data = request.get_json()
 
+        # Validate input data
+        if not data or not isinstance(data, list) or len(data) == 0:
+            raise ValueError("Input data is empty or not properly formatted.")
+
         # Convert the JSON data to a Pandas DataFrame
         df = pd.DataFrame(data)
+
+        if df.empty:
+            raise ValueError("The uploaded CSV contains no data.")
 
         # Step 1: Data Cleaning
         # Handle missing values by filling with median for numerical or mode for categorical
         for column in df.columns:
-            if np.issubdtype(df[column].dtype, np.number):
+            if pd.api.types.is_numeric_dtype(df[column]):
                 df[column].fillna(df[column].median(), inplace=True)
             else:
                 df[column].fillna(df[column].mode()[0], inplace=True)
@@ -41,14 +48,22 @@ def process_csv():
         one_hot_encoder = OneHotEncoder(sparse_output=False, drop='first')
         label_encoder = LabelEncoder()
 
-        # Apply One-Hot Encoding to unordered categorical columns
+        # Apply encoding to categorical columns
         for column in categorical_features:
-            if df[column].nunique() < 10:  # Assuming columns with < 10 unique values are unordered
+            unique_values = df[column].nunique()
+            if unique_values < 10:  # One-Hot Encoding for low-cardinality categorical columns
+                if df[column].isnull().all():
+                    continue  # Skip columns with all null values
                 one_hot_encoded = pd.DataFrame(one_hot_encoder.fit_transform(df[[column]]),
                                                columns=one_hot_encoder.get_feature_names_out([column]))
                 df = pd.concat([df, one_hot_encoded], axis=1).drop(column, axis=1)
-            else:
+            elif unique_values < 100:  # Label Encoding for moderate-cardinality categorical columns
+                if df[column].isnull().all():
+                    continue  # Skip columns with all null values
                 df[column] = label_encoder.fit_transform(df[column])
+            else:
+                # Skip encoding for columns with very high cardinality (e.g., unique identifiers)
+                continue
 
         # Step 3: Correlation Analysis
         correlation_threshold = 0.3
@@ -59,8 +74,11 @@ def process_csv():
 
         # Step 4: Clustering
         # Using K-Means clustering for simplicity, automatically determine number of clusters
-        kmeans = KMeans(n_clusters=3)  # Assuming 3 clusters for demonstration
-        df['Cluster'] = kmeans.fit_predict(df[numeric_features])
+        if len(numeric_features) > 0:
+            kmeans = KMeans(n_clusters=3)  # Assuming 3 clusters for demonstration
+            df['Cluster'] = kmeans.fit_predict(df[numeric_features])
+        else:
+            df['Cluster'] = []  # No clustering performed if no numeric features
 
         # Step 5: Predictions
         # Identify potential target columns
@@ -88,7 +106,7 @@ def process_csv():
         response = {
             "status": "success",
             "significant_correlations": significant_correlations.to_dict(orient='records'),
-            "clustering": df['Cluster'].value_counts().to_dict(),
+            "clustering": df['Cluster'].value_counts().to_dict() if 'Cluster' in df else {},
             "prediction_results": prediction_results
         }
 
