@@ -63,7 +63,7 @@ def process_csv():
                 df[column] = label_encoder.fit_transform(df[column])
             else:
                 # Skip encoding for columns with very high cardinality (e.g., unique identifiers)
-                continue
+                df.drop(columns=[column], inplace=True)  # Drop high cardinality columns
 
         # Step 3: Correlation Analysis
         correlation_threshold = 0.3
