@@ -87,7 +87,7 @@ const CsvUploader = () => {
   const pollProgress = (taskId) => {
     const interval = setInterval(async () => {
       try {
-        const response = await axios.get(`http://localhost:5000/progress/${taskId}`);
+        const response = await axios.get(`https://school-ai-backend.onrender.com/progress/${taskId}`);
         if (response.data.status === "processing") {
           setProgress(response.data.progress);
           setStepsCompleted(response.data.steps_completed || []);
