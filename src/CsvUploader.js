@@ -65,11 +65,11 @@ const CsvUploader = () => {
     };
 
     try {
-      const response = await axios.post("http://localhost:5000/process", payload, {
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      const response = await axios.post("https://school-ai-backend.onrender.com/process", payload, {
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
 
       if (response.data.status === "processing") {
         const taskId = response.data.task_id;
@@ -88,6 +88,7 @@ const CsvUploader = () => {
     const interval = setInterval(async () => {
       try {
         const response = await axios.get(`https://school-ai-backend.onrender.com/progress/${taskId}`);
+
         if (response.data.status === "processing") {
           setProgress(response.data.progress);
           setStepsCompleted(response.data.steps_completed || []);
