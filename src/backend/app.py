@@ -51,7 +51,6 @@ def analyze_ncea_results(results_str):
 def analyze_categorical_relationship(series1, series2, col1_name, col2_name):
     """Analyze the relationship between two categorical variables in detail."""
     try:
-        # Handle lists stored as strings
         if series1.dtype == object:
             series1 = series1.apply(lambda x: str(x).strip('[]').split(',')[0].strip() if isinstance(x, str) else str(x))
         if series2.dtype == object:
@@ -60,11 +59,9 @@ def analyze_categorical_relationship(series1, series2, col1_name, col2_name):
         contingency = pd.crosstab(series1, series2)
         chi2, p_value, dof, expected = chi2_contingency(contingency)
         
-        # Get unique categories for both variables
         categories1 = contingency.index.unique()
         categories2 = contingency.columns.unique()
         
-        # Calculate associations for all combinations
         associations = []
         for cat1 in categories1:
             for cat2 in categories2:
@@ -75,7 +72,6 @@ def analyze_categorical_relationship(series1, series2, col1_name, col2_name):
                     difference = observed - expected_val
                     strength = (difference / expected_val) * 100
                     
-                    # Add row and column totals
                     row_total = contingency.loc[cat1].sum()
                     col_total = contingency[cat2].sum()
                     
@@ -91,10 +87,8 @@ def analyze_categorical_relationship(series1, series2, col1_name, col2_name):
                         'col_percentage': float(observed / col_total * 100)
                     })
         
-        # Sort associations by absolute strength
         associations.sort(key=lambda x: abs(x['strength']), reverse=True)
         
-        # Add category summaries
         category_summaries = {
             'primary': {cat: contingency.loc[cat].sum() for cat in categories1},
             'secondary': {cat: contingency[cat].sum() for cat in categories2}
@@ -104,7 +98,7 @@ def analyze_categorical_relationship(series1, series2, col1_name, col2_name):
             'chi2': float(chi2),
             'p_value': float(p_value),
             'dof': int(dof),
-            'associations': associations,  # Now includes all combinations
+            'associations': associations,
             'total_observations': int(contingency.values.sum()),
             'category_summaries': category_summaries
         }
@@ -113,96 +107,18 @@ def analyze_categorical_relationship(series1, series2, col1_name, col2_name):
         print(f"Error in analyze_categorical_relationship: {str(e)}")
         return None
 
-def process_pair(data_dict, col1, col2):
-    """Process a single pair of columns with detailed analysis."""
-    try:
-        series1 = pd.Series(data_dict[col1], name=col1)
-        series2 = pd.Series(data_dict[col2], name=col2)
-        
-        # Calculate Cramér's V
-        contingency = pd.crosstab(series1, series2)
-        chi2 = chi2_contingency(contingency, correction=False)[0]
-        n = contingency.values.sum()
-        min_dim = min(contingency.shape) - 1
-        
-        if min_dim <= 0:
-            return {
-                'col1': col1,
-                'col2': col2,
-                'value': 0,
-                'details': None
-            }
-            
-        cramer_v = np.sqrt(chi2 / (n * min_dim))
-        
-        # Get detailed analysis
-        details = analyze_categorical_relationship(series1, series2, col1, col2)
-        
-        return {
-            'col1': col1,
-            'col2': col2,
-            'value': float(cramer_v),
-            'details': details
-        }
-        
-    except Exception as e:
-        print(f"Error processing pair {col1}, {col2}: {str(e)}")
-        return {
-            'col1': col1,
-            'col2': col2,
-            'value': 0,
-            'details': None
-        }
-    
-    # Sort associations by absolute strength
-    associations.sort(key=lambda x: abs(x['strength']), reverse=True)
-    
-    return {
-        'chi2': float(chi2),
-        'p_value': float(p_value),
-        'associations': associations[:5],  # Top 5 strongest associations
-        'row_percentages': row_pcts.to_dict(),
-        'column_percentages': col_pcts.to_dict()
-    }
-
 def calculate_cramers_v_with_details(series1, series2, col1_name, col2_name):
     """Calculate Cramér's V statistic and detailed categorical analysis."""
     try:
-        # Special handling for NCEA Results
-        if col1_name == 'NCEA Results' or col2_name == 'NCEA Results':
-            ncea_col = series1 if col1_name == 'NCEA Results' else series2
-            other_col = series2 if col1_name == 'NCEA Results' else series1
-            
-            # Process NCEA results
-            processed_ncea = pd.Series([
-                analyze_ncea_results(result)['primary_achievement'] 
-                if analyze_ncea_results(result) else 'Unknown'
-                for result in ncea_col
-            ])
-            
-            contingency = pd.crosstab(processed_ncea, other_col)
-            detailed_analysis = analyze_categorical_relationship(
-                processed_ncea, 
-                other_col,
-                'NCEA Achievement Level',
-                col2_name if col1_name == 'NCEA Results' else col1_name
-            )
-        else:
-            contingency = pd.crosstab(series1, series2)
-            detailed_analysis = analyze_categorical_relationship(series1, series2, col1_name, col2_name)
-        
-        # Calculate Cramér's V
-        chi2 = chi2_contingency(contingency, correction=False)[0]
+        contingency = pd.crosstab(series1, series2)
+        chi2, p_value, dof, expected = chi2_contingency(contingency)
         n = contingency.values.sum()
         min_dim = min(contingency.shape) - 1
-        
-        if min_dim <= 0:
-            return 0, None
-            
-        cramer_v = np.sqrt(chi2 / (n * min_dim))
-        
-        return cramer_v, detailed_analysis
-        
+        cramer_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 else 0
+
+        details = analyze_categorical_relationship(series1, series2, col1_name, col2_name)
+
+        return cramer_v, details
     except Exception as e:
         print(f"Error in calculate_cramers_v_with_details: {str(e)}")
         return 0, None
@@ -237,17 +153,14 @@ def process_batches_with_eta(df, selected_columns, batch_size=20):
         column_pairs = list(combinations(selected_columns, 2))
         total_pairs = len(column_pairs)
         
-        # Convert DataFrame to dictionary for pickling
         data_dict = {col: df[col].values for col in selected_columns}
         
-        # Process in batches
         results = []
         start_time = time.time()
         
         for i in range(0, total_pairs, batch_size):
             batch_pairs = column_pairs[i:i + batch_size]
             
-            # Process batch in parallel
             batch_results = Parallel(n_jobs=-1)(
                 delayed(process_pair)(data_dict, col1, col2) 
                 for col1, col2 in batch_pairs
@@ -255,7 +168,6 @@ def process_batches_with_eta(df, selected_columns, batch_size=20):
             
             results.extend(batch_results)
             
-            # Calculate and display ETA
             elapsed_time = time.time() - start_time
             processed_pairs = min(i + batch_size, total_pairs)
             remaining_pairs = total_pairs - processed_pairs
@@ -266,7 +178,6 @@ def process_batches_with_eta(df, selected_columns, batch_size=20):
 
         sys.stdout.write('\n')
         
-        # Calculate final results
         valid_results = [r['value'] for r in results if r['value'] is not None and not np.isnan(r['value'])]
         average_cramers_v = sum(valid_results) / len(valid_results) if valid_results else 0
         
@@ -291,79 +202,28 @@ def process_csv():
     try:
         content = request.get_json()
         if not content:
-            return jsonify({
-                "status": "error",
-                "message": "No data provided"
-            }), 400
-        
+            return jsonify({"status": "error", "message": "No data provided"}), 400
+
         data = content.get('data', [])
         selected_columns = content.get('selected_columns', [])
-        
+
         if not data:
-            return jsonify({
-                "status": "error",
-                "message": "No data provided in JSON"
-            }), 400
+            return jsonify({"status": "error", "message": "No data provided in JSON"}), 400
 
         if not selected_columns or len(selected_columns) < 2:
-            return jsonify({
-                "status": "error",
-                "message": "Please select at least two columns for analysis"
-            }), 400
+            return jsonify({"status": "error", "message": "Please select at least two columns for analysis"}), 400
 
-        print(f"Received data length: {len(data)}")
-        print(f"Selected columns: {selected_columns}")
-        
-        # Create DataFrame and select only the requested columns
         df = pd.DataFrame(data)
-        
-        # Verify all selected columns exist in the DataFrame
-        missing_cols = [col for col in selected_columns if col not in df.columns]
-        if missing_cols:
-            return jsonify({
-                "status": "error",
-                "message": f"Columns not found in data: {missing_cols}"
-            }), 400
-            
-        df_selected = df[selected_columns]
-        
-        # Process the data
-        try:
-            results = process_batches_with_eta(df_selected, selected_columns)
-            
-            # Ensure results is not None and has the expected structure
-            if not results:
-                return jsonify({
-                    "status": "error",
-                    "message": "Analysis produced no results"
-                }), 400
 
-            # Validate results structure
-            required_keys = ["average_cramers_v", "valid_pairs", "pairs"]
-            if not all(key in results for key in required_keys):
-                return jsonify({
-                    "status": "error",
-                    "message": "Invalid results structure"
-                }), 400
+        results = process_batches_with_eta(df[selected_columns], selected_columns)
 
-            return jsonify({
-                "status": "success",
-                "results": results
-            })
+        json_compatible_results = json.loads(json.dumps(results, default=lambda o: o if isinstance(o, (int, float, str, list, dict, bool)) else str(o)))
 
-        except Exception as e:
-            print(f"Error in processing data: {str(e)}")
-            return jsonify({
-                "status": "error",
-                "message": f"Error processing data: {str(e)}"
-            }), 400
+        return jsonify({"status": "success", "results": json_compatible_results})
 
     except Exception as e:
         print(f"Error in process_csv: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 400
+        return jsonify({"status": "error", "message": str(e)}), 400
 
 if __name__ == "__main__":
     app.run(debug=False, threaded=True)
