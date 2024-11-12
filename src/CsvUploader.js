@@ -128,7 +128,7 @@ const CsvUploader = () => {
     setResults(null);
 
     try {
-      const response = await axios.post("http://localhost:5000/process", {
+      const response = await axios.post("http://0.0.0.0:10000/process", {
         data: csvData,
         selected_columns: selectedColumns,
       });
