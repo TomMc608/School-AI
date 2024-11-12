@@ -2,453 +2,368 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
 from scipy.stats import chi2_contingency
-from itertools import combinations, product
+from itertools import combinations
+from joblib import Parallel, delayed
 import logging
-import threading
-import uuid
 import time
+import sys
+import json
+import ast
 
 app = Flask(__name__)
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
 
-progress_store = {}
-progress_store_lock = threading.Lock()
+def analyze_ncea_results(results_str):
+    """Extract and analyze NCEA results from the string representation."""
+    try:
+        results = ast.literal_eval(results_str)
+        if not results or not isinstance(results, list):
+            return None
+        
+        # Calculate average credits and achievement levels
+        total_credits = 0
+        achievement_counts = {
+            'Excellence': 0,
+            'Merit': 0,
+            'Achieved': 0
+        }
+        
+        for result in results:
+            if isinstance(result, dict):
+                total_credits += result.get('Credits', 0)
+                level = result.get('Achievement Level')
+                if level in achievement_counts:
+                    achievement_counts[level] += 1
+        
+        avg_credits = total_credits / len(results) if results else 0
+        primary_achievement = max(achievement_counts.items(), key=lambda x: x[1])[0]
+        
+        return {
+            'average_credits': avg_credits,
+            'primary_achievement': primary_achievement
+        }
+    except:
+        return None
 
-def interpret_cramers_v(v):
-    if v < 0.1:
-        return "Very weak"
-    elif v < 0.3:
-        return "Weak"
-    elif v < 0.5:
-        return "Moderate"
-    elif v < 0.7:
-        return "Strong"
-    else:
-        return "Very strong"
+def analyze_categorical_relationship(series1, series2, col1_name, col2_name):
+    """Analyze the relationship between two categorical variables in detail."""
+    try:
+        # Handle lists stored as strings
+        if series1.dtype == object:
+            series1 = series1.apply(lambda x: str(x).strip('[]').split(',')[0].strip() if isinstance(x, str) else str(x))
+        if series2.dtype == object:
+            series2 = series2.apply(lambda x: str(x).strip('[]').split(',')[0].strip() if isinstance(x, str) else str(x))
 
-def interpret_model_accuracy(accuracy):
-    if accuracy < 0.6:
-        return "Poor"
-    elif accuracy < 0.7:
-        return "Fair"
-    elif accuracy < 0.8:
-        return "Good"
-    elif accuracy < 0.9:
-        return "Very good"
-    else:
-        return "Excellent"
+        contingency = pd.crosstab(series1, series2)
+        chi2, p_value, dof, expected = chi2_contingency(contingency)
+        
+        # Get unique categories for both variables
+        categories1 = contingency.index.unique()
+        categories2 = contingency.columns.unique()
+        
+        # Calculate associations for all combinations
+        associations = []
+        for cat1 in categories1:
+            for cat2 in categories2:
+                observed = contingency.loc[cat1, cat2]
+                expected_val = (contingency.loc[cat1].sum() * contingency[cat2].sum()) / contingency.values.sum()
+                
+                if expected_val > 0:
+                    difference = observed - expected_val
+                    strength = (difference / expected_val) * 100
+                    
+                    # Add row and column totals
+                    row_total = contingency.loc[cat1].sum()
+                    col_total = contingency[cat2].sum()
+                    
+                    associations.append({
+                        'category1': str(cat1),
+                        'category2': str(cat2),
+                        'observed': float(observed),
+                        'expected': float(expected_val),
+                        'strength': float(strength),
+                        'row_total': float(row_total),
+                        'col_total': float(col_total),
+                        'row_percentage': float(observed / row_total * 100),
+                        'col_percentage': float(observed / col_total * 100)
+                    })
+        
+        # Sort associations by absolute strength
+        associations.sort(key=lambda x: abs(x['strength']), reverse=True)
+        
+        # Add category summaries
+        category_summaries = {
+            'primary': {cat: contingency.loc[cat].sum() for cat in categories1},
+            'secondary': {cat: contingency[cat].sum() for cat in categories2}
+        }
+        
+        return {
+            'chi2': float(chi2),
+            'p_value': float(p_value),
+            'dof': int(dof),
+            'associations': associations,  # Now includes all combinations
+            'total_observations': int(contingency.values.sum()),
+            'category_summaries': category_summaries
+        }
+        
+    except Exception as e:
+        print(f"Error in analyze_categorical_relationship: {str(e)}")
+        return None
+
+def process_pair(data_dict, col1, col2):
+    """Process a single pair of columns with detailed analysis."""
+    try:
+        series1 = pd.Series(data_dict[col1], name=col1)
+        series2 = pd.Series(data_dict[col2], name=col2)
+        
+        # Calculate Cramér's V
+        contingency = pd.crosstab(series1, series2)
+        chi2 = chi2_contingency(contingency, correction=False)[0]
+        n = contingency.values.sum()
+        min_dim = min(contingency.shape) - 1
+        
+        if min_dim <= 0:
+            return {
+                'col1': col1,
+                'col2': col2,
+                'value': 0,
+                'details': None
+            }
+            
+        cramer_v = np.sqrt(chi2 / (n * min_dim))
+        
+        # Get detailed analysis
+        details = analyze_categorical_relationship(series1, series2, col1, col2)
+        
+        return {
+            'col1': col1,
+            'col2': col2,
+            'value': float(cramer_v),
+            'details': details
+        }
+        
+    except Exception as e:
+        print(f"Error processing pair {col1}, {col2}: {str(e)}")
+        return {
+            'col1': col1,
+            'col2': col2,
+            'value': 0,
+            'details': None
+        }
+    
+    # Sort associations by absolute strength
+    associations.sort(key=lambda x: abs(x['strength']), reverse=True)
+    
+    return {
+        'chi2': float(chi2),
+        'p_value': float(p_value),
+        'associations': associations[:5],  # Top 5 strongest associations
+        'row_percentages': row_pcts.to_dict(),
+        'column_percentages': col_pcts.to_dict()
+    }
+
+def calculate_cramers_v_with_details(series1, series2, col1_name, col2_name):
+    """Calculate Cramér's V statistic and detailed categorical analysis."""
+    try:
+        # Special handling for NCEA Results
+        if col1_name == 'NCEA Results' or col2_name == 'NCEA Results':
+            ncea_col = series1 if col1_name == 'NCEA Results' else series2
+            other_col = series2 if col1_name == 'NCEA Results' else series1
+            
+            # Process NCEA results
+            processed_ncea = pd.Series([
+                analyze_ncea_results(result)['primary_achievement'] 
+                if analyze_ncea_results(result) else 'Unknown'
+                for result in ncea_col
+            ])
+            
+            contingency = pd.crosstab(processed_ncea, other_col)
+            detailed_analysis = analyze_categorical_relationship(
+                processed_ncea, 
+                other_col,
+                'NCEA Achievement Level',
+                col2_name if col1_name == 'NCEA Results' else col1_name
+            )
+        else:
+            contingency = pd.crosstab(series1, series2)
+            detailed_analysis = analyze_categorical_relationship(series1, series2, col1_name, col2_name)
+        
+        # Calculate Cramér's V
+        chi2 = chi2_contingency(contingency, correction=False)[0]
+        n = contingency.values.sum()
+        min_dim = min(contingency.shape) - 1
+        
+        if min_dim <= 0:
+            return 0, None
+            
+        cramer_v = np.sqrt(chi2 / (n * min_dim))
+        
+        return cramer_v, detailed_analysis
+        
+    except Exception as e:
+        print(f"Error in calculate_cramers_v_with_details: {str(e)}")
+        return 0, None
+
+def process_pair(data_dict, col1, col2):
+    """Process a single pair of columns with detailed analysis."""
+    try:
+        series1 = pd.Series(data_dict[col1], name=col1)
+        series2 = pd.Series(data_dict[col2], name=col2)
+        cramer_v, details = calculate_cramers_v_with_details(series1, series2, col1, col2)
+        
+        return {
+            'col1': col1,
+            'col2': col2,
+            'value': cramer_v,
+            'details': details
+        }
+    except Exception as e:
+        print(f"Error processing pair {col1}, {col2}: {str(e)}")
+        return {
+            'col1': col1,
+            'col2': col2,
+            'value': 0,
+            'details': None
+        }
+
+def process_batches_with_eta(df, selected_columns, batch_size=20):
+    try:
+        if len(selected_columns) < 2:
+            raise ValueError("Please select at least two columns for analysis")
+
+        column_pairs = list(combinations(selected_columns, 2))
+        total_pairs = len(column_pairs)
+        
+        # Convert DataFrame to dictionary for pickling
+        data_dict = {col: df[col].values for col in selected_columns}
+        
+        # Process in batches
+        results = []
+        start_time = time.time()
+        
+        for i in range(0, total_pairs, batch_size):
+            batch_pairs = column_pairs[i:i + batch_size]
+            
+            # Process batch in parallel
+            batch_results = Parallel(n_jobs=-1)(
+                delayed(process_pair)(data_dict, col1, col2) 
+                for col1, col2 in batch_pairs
+            )
+            
+            results.extend(batch_results)
+            
+            # Calculate and display ETA
+            elapsed_time = time.time() - start_time
+            processed_pairs = min(i + batch_size, total_pairs)
+            remaining_pairs = total_pairs - processed_pairs
+            eta_seconds = (elapsed_time / processed_pairs) * remaining_pairs if processed_pairs > 0 else 0
+            
+            sys.stdout.write(f"\rETA: {format_eta(eta_seconds)}")
+            sys.stdout.flush()
+
+        sys.stdout.write('\n')
+        
+        # Calculate final results
+        valid_results = [r['value'] for r in results if r['value'] is not None and not np.isnan(r['value'])]
+        average_cramers_v = sum(valid_results) / len(valid_results) if valid_results else 0
+        
+        return {
+            "average_cramers_v": float(average_cramers_v),
+            "valid_pairs": len(valid_results),
+            "pairs": results
+        }
+
+    except Exception as e:
+        logging.error(f"Error in batch processing: {str(e)}")
+        raise
+
+def format_eta(seconds):
+    """Format ETA in hours, minutes, and seconds."""
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}h {minutes}m {seconds}s"
 
 @app.route('/process', methods=['POST'])
 def process_csv():
     try:
-        logging.info("Received request for data processing.")
         content = request.get_json()
-        data = content.get('data')
-        selected_columns = content.get('selected_columns')
-
-        if not data or not isinstance(data, list) or len(data) == 0:
-            raise ValueError("Input data is empty or not properly formatted.")
-
-        if not selected_columns or not isinstance(selected_columns, list):
-            raise ValueError("Selected columns are missing or not in the correct format.")
-
-        logging.info(f"Received selected_columns: {selected_columns}")
-
-        task_id = str(uuid.uuid4())
-        progress_store[task_id] = {
-            "progress": 0,
-            "status": "processing",
-            "steps_completed": [],
-            "eta": None,
-            "start_time": time.time()
-        }
-
-        thread = threading.Thread(target=process_data_task, args=(content, task_id))
-        thread.start()
-
-        return jsonify({"status": "processing", "task_id": task_id})
-    except Exception as e:
-        logging.error(f"Unhandled error: {str(e)}")
-        return jsonify({"status": "error", "message": str(e), "steps_completed": []}), 400
-
-def process_data_task(content, task_id):
-    try:
-        data = content.get('data')
-        selected_columns = content.get('selected_columns')
-        error_logs = []
-
-        steps = [
-            "Preprocessing Data",
-            "Computing Average Cramér's V",
-            "Logistic Regression Analysis",
-            "Decision Tree Analysis",
-            "Random Forest Analysis",
-            "Chi-Square Tests",
-            "Multi-Variable Analysis"
-        ]
-        total_steps = len(steps)
-        progress_data = progress_store[task_id]
-        start_time = progress_data["start_time"]
-
-        # Initialize results
-        average_cramers_v = None
-        logistic_regression_results = []
-        decision_tree_results = []
-        random_forest_results = []
-        chi_square_results = []
-        multi_variable_results = []
-
-        # Step 1: Preprocess Data
-        update_progress(task_id, steps[0], 1, total_steps)
-        df_selected = preprocess_dataframe(pd.DataFrame(data)[selected_columns], error_logs)
-        update_eta(task_id, start_time, total_steps, 1)
-
-        # Step 2: Compute Average Cramér's V
-        update_progress(task_id, steps[1], 2, total_steps)
-        average_cramers_v = compute_average_cramers_v(df_selected, error_logs)
-        update_eta(task_id, start_time, total_steps, 2)
-
-        # Step 3: Logistic Regression Analysis
-        update_progress(task_id, steps[2], 3, total_steps)
-        logistic_regression_results = logistic_regression_analysis(df_selected, error_logs)
-        update_eta(task_id, start_time, total_steps, 3)
-
-        # Step 4: Decision Tree Analysis
-        update_progress(task_id, steps[3], 4, total_steps)
-        decision_tree_results = decision_tree_analysis(df_selected, error_logs)
-        update_eta(task_id, start_time, total_steps, 4)
-
-        # Step 5: Random Forest Analysis
-        update_progress(task_id, steps[4], 5, total_steps)
-        random_forest_results = random_forest_analysis(df_selected, error_logs)
-        update_eta(task_id, start_time, total_steps, 5)
-
-        # Step 6: Chi-Square Tests
-        update_progress(task_id, steps[5], 6, total_steps)
-        chi_square_results = chi_square_tests(df_selected, error_logs)
-        update_eta(task_id, start_time, total_steps, 6)
-
-        # Step 7: Multi-Variable Analysis
-        update_progress(task_id, steps[6], 7, total_steps)
-        multi_variable_results = multi_variable_analysis(df_selected, error_logs)
-        update_eta(task_id, start_time, total_steps, 7)
-
-        # Store the final result
-        with progress_store_lock:
-            progress_store[task_id] = {
-                "status": "success",
-                "progress": 100,
-                "steps_completed": steps,
-                "eta": 0,
-                "average_cramers_v": average_cramers_v,
-                "logistic_regression_results": logistic_regression_results,
-                "decision_tree_results": decision_tree_results,
-                "random_forest_results": random_forest_results,
-                "chi_square_results": chi_square_results,
-                "multi_variable_results": multi_variable_results,
-                "error_logs": error_logs
-            }
-    except Exception as e:
-        logging.error(f"Error in processing data task: {str(e)}")
-        with progress_store_lock:
-            progress_store[task_id] = {
+        if not content:
+            return jsonify({
                 "status": "error",
-                "message": str(e),
-                "steps_completed": progress_store[task_id].get("steps_completed", []),
-                "error_logs": error_logs
-            }
+                "message": "No data provided"
+            }), 400
+        
+        data = content.get('data', [])
+        selected_columns = content.get('selected_columns', [])
+        
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "No data provided in JSON"
+            }), 400
 
-def update_progress(task_id, step_name, current_step, total_steps):
-    progress = (current_step / total_steps) * 100
-    with progress_store_lock:
-        steps_completed = progress_store[task_id].get("steps_completed", [])
-        steps_completed.append(step_name)
-        progress_store[task_id]["progress"] = progress
-        progress_store[task_id]["steps_completed"] = steps_completed
-    logging.info(f"Task {task_id}: Completed {step_name} ({progress:.2f}%).")
+        if not selected_columns or len(selected_columns) < 2:
+            return jsonify({
+                "status": "error",
+                "message": "Please select at least two columns for analysis"
+            }), 400
 
-def update_eta(task_id, start_time, total_steps, current_step):
-    elapsed_time = time.time() - start_time
-    avg_time_per_step = elapsed_time / current_step
-    steps_remaining = total_steps - current_step
-    eta = avg_time_per_step * steps_remaining
-    with progress_store_lock:
-        progress_store[task_id]["eta"] = eta
+        print(f"Received data length: {len(data)}")
+        print(f"Selected columns: {selected_columns}")
+        
+        # Create DataFrame and select only the requested columns
+        df = pd.DataFrame(data)
+        
+        # Verify all selected columns exist in the DataFrame
+        missing_cols = [col for col in selected_columns if col not in df.columns]
+        if missing_cols:
+            return jsonify({
+                "status": "error",
+                "message": f"Columns not found in data: {missing_cols}"
+            }), 400
+            
+        df_selected = df[selected_columns]
+        
+        # Process the data
+        try:
+            results = process_batches_with_eta(df_selected, selected_columns)
+            
+            # Ensure results is not None and has the expected structure
+            if not results:
+                return jsonify({
+                    "status": "error",
+                    "message": "Analysis produced no results"
+                }), 400
 
-@app.route('/progress/<task_id>', methods=['GET'])
-def get_progress(task_id):
-    with progress_store_lock:
-        progress = progress_store.get(task_id)
-        if progress is None:
-            return jsonify({"status": "error", "message": "Invalid task ID.", "steps_completed": []}), 404
-        else:
-            if "steps_completed" not in progress or not isinstance(progress["steps_completed"], list):
-                progress["steps_completed"] = []
-            return jsonify(progress)
+            # Validate results structure
+            required_keys = ["average_cramers_v", "valid_pairs", "pairs"]
+            if not all(key in results for key in required_keys):
+                return jsonify({
+                    "status": "error",
+                    "message": "Invalid results structure"
+                }), 400
 
-def preprocess_dataframe(df, error_logs):
-    try:
-        df_processed = df.copy()
-        df_processed = df_processed.fillna(method='ffill').fillna(method='bfill')
-        df_processed = reduce_cardinality(df_processed, error_logs)
-        return pd.get_dummies(df_processed, drop_first=True)
-    except Exception as e:
-        error_logs.append(f"Error processing dataframe: {str(e)}")
-        logging.error(f"Error processing dataframe: {str(e)}")
-        return df
-
-def reduce_cardinality(df, error_logs, threshold=0.05):
-    try:
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                value_counts = df[col].value_counts(normalize=True)
-                to_replace = value_counts[value_counts < threshold].index
-                df[col] = df[col].replace(to_replace, 'Other')
-        return df
-    except Exception as e:
-        error_logs.append(f"Error reducing cardinality: {str(e)}")
-        logging.error(f"Error reducing cardinality: {str(e)}")
-        return df
-
-def compute_average_cramers_v(df, error_logs, max_unique_values=10):
-    try:
-        logging.info("Computing average Cramér's V.")
-        categorical_cols = [col for col in df.columns if df[col].nunique() <= max_unique_values]
-        if len(categorical_cols) < 2:
-            error_logs.append("Not enough variables for correlation analysis after filtering.")
-            return None
-
-        pairs = list(combinations(categorical_cols, 2))
-        total_cramers_v = 0
-        valid_pairs = 0
-
-        for col1, col2 in pairs:
-            crosstab = pd.crosstab(df[col1], df[col2])
-            if crosstab.size == 0:
-                continue
-            chi2, _, _, _ = chi2_contingency(crosstab)
-            n = crosstab.sum().sum()
-            cramers_v = np.sqrt(chi2 / (n * (min(crosstab.shape) - 1)))
-            if not np.isnan(cramers_v):
-                total_cramers_v += cramers_v
-                valid_pairs += 1
-
-        if valid_pairs == 0:
-            error_logs.append("No valid pairs for computing average Cramér's V.")
-            return None
-
-        average_cramers_v = total_cramers_v / valid_pairs
-        interpretation = interpret_cramers_v(average_cramers_v)
-        logging.info(f"Average Cramér's V computed successfully: {average_cramers_v}")
-        return {
-            "value": average_cramers_v,
-            "interpretation": interpretation
-        }
-    except Exception as e:
-        error_logs.append(f"Error computing average Cramér's V: {str(e)}")
-        logging.error(f"Error computing average Cramér's V: {str(e)}")
-        return None
-
-def logistic_regression_analysis(df, error_logs):
-    results = []
-    try:
-        logging.info("Starting logistic regression analysis.")
-        columns = df.columns.tolist()
-
-        for target_col in columns:
-            predictors = [col for col in columns if col != target_col]
-            X = df[predictors]
-            y = df[target_col]
-
-            model = LogisticRegression(max_iter=1000)
-            model.fit(X, y)
-            score = model.score(X, y)
-            interpretation = interpret_model_accuracy(score)
-
-            results.append({
-                "target": target_col,
-                "predictors": predictors,
-                "accuracy": score,
-                "interpretation": interpretation
+            return jsonify({
+                "status": "success",
+                "results": results
             })
 
-        top_results = sorted(results, key=lambda x: x['accuracy'], reverse=True)
-        logging.info("Logistic regression analysis completed.")
-        return top_results
+        except Exception as e:
+            print(f"Error in processing data: {str(e)}")
+            return jsonify({
+                "status": "error",
+                "message": f"Error processing data: {str(e)}"
+            }), 400
+
     except Exception as e:
-        error_logs.append(f"Error during logistic regression analysis: {str(e)}.")
-        logging.error(f"Error during logistic regression analysis: {str(e)}")
-        return []
-
-def decision_tree_analysis(df, error_logs):
-    results = []
-    try:
-        logging.info("Starting decision tree analysis.")
-        columns = df.columns.tolist()
-
-        for target_col in columns:
-            predictors = [col for col in columns if col != target_col]
-            X = df[predictors]
-            y = df[target_col]
-
-            model = DecisionTreeClassifier()
-            model.fit(X, y)
-            score = model.score(X, y)
-            interpretation = interpret_model_accuracy(score)
-
-            results.append({
-                "target": target_col,
-                "predictors": predictors,
-                "accuracy": score,
-                "interpretation": interpretation
-            })
-
-        top_results = sorted(results, key=lambda x: x['accuracy'], reverse=True)
-        logging.info("Decision tree analysis completed.")
-        return top_results
-    except Exception as e:
-        error_logs.append(f"Error during decision tree analysis: {str(e)}.")
-        logging.error(f"Error during decision tree analysis: {str(e)}")
-        return []
-
-def random_forest_analysis(df, error_logs):
-    results = []
-    try:
-        logging.info("Starting random forest analysis.")
-        columns = df.columns.tolist()
-
-        for target_col in columns:
-            predictors = [col for col in columns if col != target_col]
-            X = df[predictors]
-            y = df[target_col]
-
-            model = RandomForestClassifier()
-            model.fit(X, y)
-            score = model.score(X, y)
-            interpretation = interpret_model_accuracy(score)
-
-            results.append({
-                "target": target_col,
-                "predictors": predictors,
-                "accuracy": score,
-                "interpretation": interpretation
-            })
-
-        top_results = sorted(results, key=lambda x: x['accuracy'], reverse=True)
-        logging.info("Random forest analysis completed.")
-        return top_results
-    except Exception as e:
-        error_logs.append(f"Error during random forest analysis: {str(e)}.")
-        logging.error(f"Error during random forest analysis: {str(e)}")
-        return []
-
-def chi_square_tests(df, error_logs):
-    results = []
-    try:
-        logging.info("Performing chi-square tests.")
-        columns = df.columns.tolist()
-        if len(columns) < 2:
-            error_logs.append("Not enough variables for chi-square tests.")
-            return []
-        
-        # Group columns by their prefix (before the underscore)
-        column_groups = {}
-        for col in columns:
-            prefix = col.split('_')[0]
-            if prefix not in column_groups:
-                column_groups[prefix] = []
-            column_groups[prefix].append(col)
-        
-        # Compare columns from different groups
-        for group1, group2 in combinations(column_groups.keys(), 2):
-            for col1 in column_groups[group1]:
-                for col2 in column_groups[group2]:
-                    crosstab = pd.crosstab(df[col1], df[col2])
-                    if crosstab.size == 0:
-                        continue
-                    chi2, p, _, _ = chi2_contingency(crosstab)
-                    n = crosstab.sum().sum()
-                    cramers_v = np.sqrt(chi2 / (n * (min(crosstab.shape) - 1)))
-                    interpretation = interpret_cramers_v(cramers_v)
-                    results.append({
-                        "variable_1": col1,
-                        "variable_2": col2,
-                        "chi2": chi2,
-                        "p_value": p,
-                        "cramers_v": cramers_v,
-                        "interpretation": interpretation
-                    })
-
-        top_results = sorted(results, key=lambda x: x['cramers_v'], reverse=True)
-        logging.info("Chi-square tests completed.")
-        return top_results
-    except Exception as e:
-        error_logs.append(f"Error during chi-square tests: {str(e)}.")
-        logging.error(f"Error during chi-square tests: {str(e)}")
-        return []
-
-def multi_variable_analysis(df, error_logs):
-    results = []
-    try:
-        logging.info("Performing multi-variable analysis.")
-        columns = df.columns.tolist()
-        if len(columns) < 2:
-            error_logs.append("Not enough variables for multi-variable analysis.")
-            return []
-        
-        # Group columns by their prefix (before the underscore)
-        column_groups = {}
-        for col in columns:
-            prefix = col.split('_')[0]
-            if prefix not in column_groups:
-                column_groups[prefix] = []
-            column_groups[prefix].append(col)
-        
-        # Generate all possible combinations of columns from different groups
-        group_combinations = []
-        for r in range(2, len(column_groups) + 1):
-            group_combinations.extend(combinations(column_groups.keys(), r))
-
-        for groups in group_combinations:
-            for columns in product(*[column_groups[group] for group in groups]):
-                # Skip if all columns are from the same group
-                if len(set(col.split('_')[0] for col in columns)) < 2:
-                    continue
-                
-                # Create a frequency table for multiple variables
-                freq_table = df.groupby(list(columns)).size().unstack(fill_value=0)
-                
-                # Perform chi-square test
-                chi2, p, dof, expected = chi2_contingency(freq_table)
-                
-                n = freq_table.sum().sum()
-                min_dim = min(freq_table.shape) - 1
-                if min_dim == 0:
-                    continue
-                
-                cramers_v = np.sqrt(chi2 / (n * min_dim))
-                interpretation = interpret_cramers_v(cramers_v)
-                results.append({
-                    "variables": list(columns),
-                    "chi2": chi2,
-                    "p_value": p,
-                    "cramers_v": cramers_v,
-                    "interpretation": interpretation
-                })
-
-        top_results = sorted(results, key=lambda x: x['cramers_v'], reverse=True)
-        logging.info("Multi-variable analysis completed.")
-        return top_results
-    except Exception as e:
-        error_logs.append(f"Error during multi-variable analysis: {str(e)}.")
-        logging.error(f"Error during multi-variable analysis: {str(e)}")
-        return []
+        print(f"Error in process_csv: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 400
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False, threaded=True)

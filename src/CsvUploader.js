@@ -144,7 +144,7 @@ const CsvUploader = () => {
         if (response.data.status === "success") {
             setResults(response.data.results);
         } else {
-            setError(response.data.message || "Error analyzing data");
+            setError(response.data.message || "Error analyzing data:");
         }
     } catch (e) {
         console.error("Analysis error:", e);
