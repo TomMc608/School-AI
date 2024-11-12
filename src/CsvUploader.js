@@ -115,12 +115,12 @@ const CsvUploader = () => {
 
   const handleSubmit = async () => {
     if (csvData.length === 0) {
-      setError("Please upload a CSV file first.");
-      return;
+        setError("Please upload a CSV file first.");
+        return;
     }
     if (selectedColumns.length < 2) {
-      setError("Please select at least 2 columns.");
-      return;
+        setError("Please select at least 2 columns.");
+        return;
     }
 
     setError(null);
@@ -128,23 +128,32 @@ const CsvUploader = () => {
     setResults(null);
 
     try {
-      const response = await axios.post("https://100.20.92.101/process ", {
-        data: csvData,
-        selected_columns: selectedColumns,
-      });
-      
-      if (response.data.status === "success") {
-        setResults(response.data.results);
-      } else {
-        setError(response.data.message || "Error analyzing data");
-      }
+        const response = await axios.post(
+            "https://school-ai-backend.onrender.com/process",
+            {
+                data: csvData,
+                selected_columns: selectedColumns,
+            },
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                },
+            }
+        );
+
+        if (response.data.status === "success") {
+            setResults(response.data.results);
+        } else {
+            setError(response.data.message || "Error analyzing data");
+        }
     } catch (e) {
-      console.error("Analysis error:", e);
-      setError(e.response?.data?.message || `Error analyzing CSV data: ${e.message}`);
+        console.error("Analysis error:", e);
+        setError(e.response?.data?.message || `Error analyzing CSV data: ${e.message}`);
     } finally {
-      setIsLoading(false);
+        setIsLoading(false);
     }
-  };
+};
+
 
   const handleColumnChange = (column) => {
     setSelectedColumns((prev) =>
