@@ -128,7 +128,7 @@ const CsvUploader = () => {
     setResults(null);
 
     try {
-      const response = await axios.post("https://school-ai-backend.onrender.com/process", {
+      const response = await axios.post("http://100.20.92.101/process", {
         data: csvData,
         selected_columns: selectedColumns,
       });
