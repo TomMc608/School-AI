@@ -116,8 +116,8 @@ def analyze_categorical_relationship(series1, series2, col1_name, col2_name):
         
         # Add category summaries
         category_summaries = {
-            'primary': {cat: contingency.loc[cat].sum() for cat in categories1},
-            'secondary': {cat: contingency[cat].sum() for cat in categories2}
+            'primary': {str(cat): int(contingency.loc[cat].sum()) for cat in categories1},
+            'secondary': {str(cat): int(contingency[cat].sum()) for cat in categories2}
         }
         
         return {
@@ -171,7 +171,7 @@ def calculate_cramers_v_with_details(series1, series2, col1_name, col2_name):
             
         cramer_v = np.sqrt(chi2 / (n * min_dim))
         
-        return cramer_v, detailed_analysis
+        return float(cramer_v), detailed_analysis  # Ensure cramer_v is a float
         
     except Exception as e:
         print(f"Error in calculate_cramers_v_with_details: {str(e)}")
@@ -187,7 +187,7 @@ def process_pair(data_dict, col1, col2):
         return {
             'col1': col1,
             'col2': col2,
-            'value': cramer_v,
+            'value': cramer_v,  # Ensure cramer_v is a float
             'details': details
         }
     except Exception as e:
@@ -240,10 +240,13 @@ def process_batches_with_eta(df, selected_columns, batch_size=20):
         valid_results = [r['value'] for r in results if r['value'] is not None and not np.isnan(r['value'])]
         average_cramers_v = sum(valid_results) / len(valid_results) if valid_results else 0
         
+        # Convert all data to serializable types
+        results_serializable = [convert_to_serializable(r) for r in results]
+        
         return {
             "average_cramers_v": float(average_cramers_v),
             "valid_pairs": len(valid_results),
-            "pairs": results
+            "pairs": results_serializable
         }
 
     except Exception as e:
@@ -255,6 +258,21 @@ def format_eta(seconds):
     hours, remainder = divmod(int(seconds), 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours}h {minutes}m {seconds}s"
+
+def convert_to_serializable(obj):
+    """Recursively convert NumPy data types to native Python types."""
+    if isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(v) for v in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
 
 @app.route('/process', methods=['POST'])
 def process_csv():
